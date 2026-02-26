@@ -1,0 +1,25 @@
+# R-Cube: Rubik's Cube Solver
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Debug/test output
+debug_*.png
+diag_*.png
+
+# Test scripts
+test_*.py
+
+# Experimental (not yet production-ready)
+auto_detect.py
+auto_7points.py
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
