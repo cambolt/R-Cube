@@ -133,21 +133,32 @@ class RubiksApp:
             
             all_raw = raw_colors_a + raw_colors_b
             
-            self.log("步骤 3/4: 正在进行 54 色色标聚类分析 (K-Means)...")
-            # Unpack: returns (final_colors, center, label)
-            new_state, _, _ = cluster_and_map_colors(all_raw)
+            self.log("步骤 3/4: 正在进行颜色识别 (HSV + G/R ratio)...")
+            # cv_engine returns colors in order: [U(0-8), F(9-17), R(18-26), D(27-35), B(36-44), L(45-53)]
+            engine_state, _, _ = cluster_and_map_colors(all_raw)
             
-            self.log("步骤 4/4: 正在生成识别结果图像与 UI 同步...")
-            # 3. Draw result images using detected colors
-            res_a = self.draw_enhanced_results_7pt(img_a, self.clicks_a, new_state, 0)
-            res_b = self.draw_enhanced_results_7pt(img_b, self.clicks_b, new_state, 27)
+            # Remap from cv_engine order [U,F,R,D,B,L] to app state order [U,R,F,D,L,B]
+            # cv_engine: U=0-8,  F=9-17,  R=18-26, D=27-35, B=36-44, L=45-53
+            # app state: U=0-8,  R=9-17,  F=18-26, D=27-35, L=36-44, B=45-53
+            new_state = [None] * 54
+            new_state[0:9]   = engine_state[0:9]    # U → U
+            new_state[9:18]  = engine_state[18:27]   # R (engine pos 18-26) → app pos 9-17
+            new_state[18:27] = engine_state[9:18]    # F (engine pos 9-17)  → app pos 18-26
+            new_state[27:36] = engine_state[27:36]   # D → D
+            new_state[36:45] = engine_state[45:54]   # L (engine pos 45-53) → app pos 36-44
+            new_state[45:54] = engine_state[36:45]   # B (engine pos 36-44) → app pos 45-53
             
-            # 4. Generate UI updates for the 54 buttons
+            self.log("步骤 4/4: 正在生成识别结果图像与 3D 同步...")
+            # Draw result images (using engine_state order since draw uses start_idx 0/27 into engine order)
+            res_a = self.draw_enhanced_results_7pt(img_a, self.clicks_a, engine_state, 0)
+            res_b = self.draw_enhanced_results_7pt(img_b, self.clicks_b, engine_state, 27)
+            
+            # Generate UI updates for the 54 buttons (in ordered_btns order = app state order)
             btn_updates = []
             for color in new_state:
                 btn_updates.append(gr.update(elem_classes=["sticker-btn", f"color-{color}"]))
 
-            final_log = self.log("识别成功! 已对全表 54 色进行色标聚类平滑。")
+            final_log = self.log("识别成功! 54个色块已识别, 3D 预览已更新。")
             return [new_state, final_log, self.get_3d_update_js(new_state), res_a, res_b] + btn_updates
         except Exception as e:
             import traceback

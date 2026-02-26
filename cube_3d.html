@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { margin: 0; overflow: hidden; background: transparent; }
+        #cube-canvas { width: 100vw; height: 100vh; display: block; }
+    </style>
+</head>
+<body>
+    <canvas id="cube-canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+    // Simplified 3D Renderer based on referenced implementation
+    class CubeRenderer {
+        constructor(canvas) {
+            this.canvas = canvas;
+            this.scene = new THREE.Scene();
+            this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+            this.cubelets = [];
+            this.animating = false;
+            this.colors = {
+                'white': 0xffffff, 'red': 0xf44336, 'green': 0x4caf50,
+                'yellow': 0xffeb3b, 'orange': 0xff9800, 'blue': 0x2196f3
+            };
+            this.faceMapping = {
+                'U': 'white', 'R': 'red', 'F': 'green', 'D': 'yellow', 'L': 'orange', 'B': 'blue'
+            };
+            // Default solved state
+            this.state = {
+                U: Array(9).fill('white'), R: Array(9).fill('red'), F: Array(9).fill('green'),
+                D: Array(9).fill('yellow'), L: Array(9).fill('orange'), B: Array(9).fill('blue')
+            };
+            this.init();
+        }
+
+        init() {
+            this.renderer.setSize(window.innerWidth, window.innerHeight);
+            this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            this.camera.position.set(4.5, 3.5, 5);
+            this.camera.lookAt(0, 0, 0);
+
+            this.scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const d1 = new THREE.DirectionalLight(0xffffff, 0.4);
+            d1.position.set(10, 10, 10);
+            this.scene.add(d1);
+
+            this.buildCube();
+            window.addEventListener('resize', () => {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+            this.render();
+            
+            // Interaction: dragging to rotate view
+            let drag = false, lx = 0, ly = 0;
+            this.canvas.onmousedown = (e) => { drag = true; lx = e.clientX; ly = e.clientY; };
+            window.onmousemove = (e) => { 
+                if (drag) { 
+                    this.rotateView(e.clientX - lx, e.clientY - ly); 
+                    lx = e.clientX; ly = e.clientY; 
+                } 
+            };
+            window.onmouseup = () => drag = false;
+        }
+
+        rotateView(dx, dy) {
+            const q1 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.007);
+            this.camera.position.applyQuaternion(q1);
+            const right = new THREE.Vector3().crossVectors(this.camera.position, new THREE.Vector3(0, 1, 0)).normalize();
+            this.camera.position.applyQuaternion(new THREE.Quaternion().setFromAxisAngle(right, dy * 0.007));
+            this.camera.lookAt(0, 0, 0);
+        }
+
+        buildCube() {
+            this.cubelets.forEach(c => this.scene.remove(c));
+            this.cubelets = [];
+            for (let x = -1; x <= 1; x++)
+                for (let y = -1; y <= 1; y++)
+                    for (let z = -1; z <= 1; z++)
+                        if (x || y || z) {
+                            const c = this.createCubelet(x, y, z);
+                            this.scene.add(c);
+                            this.cubelets.push(c);
+                        }
+        }
+
+        createCubelet(x, y, z) {
+            const geo = new THREE.BoxGeometry(0.92, 0.92, 0.92);
+            const mat = [];
+            // +X (R), -X (L), +Y (U), -Y (D), +Z (F), -Z (B)
+            for (let i = 0; i < 6; i++) mat.push(new THREE.MeshPhongMaterial({ color: 0x1a1a1a }));
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: 0x000000 })));
+            return mesh;
+        }
+
+        updateState(newState) {
+            this.state = newState;
+            this.updateColors();
+        }
+
+        updateColors() {
+            for (const c of this.cubelets) {
+                const x = Math.round(c.position.x), y = Math.round(c.position.y), z = Math.round(c.position.z);
+                const m = c.material;
+                // Mapping positions to face array indices
+                if (x === 1) m[0].color.setHex(this.colors[this.state.R[(1-y)*3+(z+1)]] || 0x1a1a1a);
+                if (x === -1) m[1].color.setHex(this.colors[this.state.L[(1-y)*3+(1-z)]] || 0x1a1a1a);
+                if (y === 1) m[2].color.setHex(this.colors[this.state.U[(1-z)*3+(x+1)]] || 0x1a1a1a);
+                if (y === -1) m[3].color.setHex(this.colors[this.state.D[(z+1)*3+(x+1)]] || 0x1a1a1a);
+                if (z === 1) m[4].color.setHex(this.colors[this.state.F[(1-y)*3+(x+1)]] || 0x1a1a1a);
+                if (z === -1) m[5].color.setHex(this.colors[this.state.B[(1-y)*3+(1-x)]] || 0x1a1a1a);
+            }
+        }
+
+        render() { 
+            this.renderer.render(this.scene, this.camera); 
+            requestAnimationFrame(() => this.render());
+        }
+
+        async animateMove(move, duration = 300) {
+            if (this.animating) return;
+            this.animating = true;
+            const face = move[0];
+            const mod = move.substring(1);
+            let angle = Math.PI / 2;
+            if (mod === '2') angle = Math.PI;
+            if (mod === "'") angle = -Math.PI / 2;
+
+            const axis = { U: [0,1,0], D: [0,-1,0], R: [1,0,0], L: [-1,0,0], F: [0,0,1], B: [0,0,-1] }[face];
+            const isLayer = {
+                U: c => Math.round(c.position.y) === 1,
+                D: c => Math.round(c.position.y) === -1,
+                R: c => Math.round(c.position.x) === 1,
+                L: c => Math.round(c.position.x) === -1,
+                F: c => Math.round(c.position.z) === 1,
+                B: c => Math.round(c.position.z) === -1
+            }[face];
+
+            const toRotate = this.cubelets.filter(isLayer);
+            const pivot = new THREE.Object3D();
+            this.scene.add(pivot);
+            toRotate.forEach(c => { this.scene.remove(c); pivot.attach(c); });
+
+            const startTime = performance.now();
+            const startQ = pivot.quaternion.clone();
+            const endQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(...axis), angle);
+
+            await new Promise(resolve => {
+                const animate = () => {
+                    const t = Math.min((performance.now() - startTime) / duration, 1);
+                    pivot.quaternion.slerpQuaternions(startQ, endQ, 1 - Math.pow(1 - t, 3));
+                    if (t < 1) requestAnimationFrame(animate);
+                    else {
+                        toRotate.forEach(c => {
+                            pivot.remove(c); this.scene.add(c);
+                            const p = new THREE.Vector3();
+                            c.getWorldPosition(p);
+                            c.position.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
+                        });
+                        this.scene.remove(pivot);
+                        this.animating = false;
+                        resolve();
+                    }
+                };
+                animate();
+            });
+        }
+    }
+
+    const renderer = new CubeRenderer(document.getElementById('cube-canvas'));
+    
+    // Listen for messages from Gradio
+    window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (data.type === 'UPDATE_STATE') {
+            renderer.updateState(data.state);
+        } else if (data.type === 'EXECUTE_MOVE') {
+            renderer.animateMove(data.move, data.duration || 300);
+        }
+    });
+
+    // Notify Gradio that we are ready
+    window.parent.postMessage({ type: 'CUBE_READY' }, '*');
+    </script>
+</body>
+</html>
