@@ -34,6 +34,52 @@ for face in ['white', 'green', 'red', 'yellow', 'blue', 'orange']:
 
 # Kociemba standard string order: U1..U9, R1..R9, F1..F9, D1..D9, L1..L9, B1..B9
 
+def rotate_face_cw(face_arr):
+    # Rotate 3x3 array clockwise
+    return [
+        face_arr[6], face_arr[3], face_arr[0],
+        face_arr[7], face_arr[4], face_arr[1],
+        face_arr[8], face_arr[5], face_arr[2]
+    ]
+
+def rotate_cube_state(state, move):
+    state = list(state)
+    face = move[0]
+    mod = move[1:] if len(move) > 1 else ""
+    
+    # 0=U, 9=F, 18=R, 27=D, 36=L, 45=B
+    face_offsets = {'U':0, 'F':9, 'R':18, 'D':27, 'L':36, 'B':45}
+    base = face_offsets[face]
+    
+    # Adjacency cycles (CW edge mapping)
+    cycles = {
+        'U': ([47,46,45], [20,19,18], [11,10,9], [38,37,36]),
+        'D': ([15,16,17], [24,25,26], [51,52,53], [42,43,44]),
+        'F': ([6,7,8], [18,21,24], [29,28,27], [44,41,38]),
+        'B': ([2,1,0], [36,39,42], [33,34,35], [26,23,20]),
+        'R': ([8,5,2], [45,48,51], [35,32,29], [17,14,11]),
+        'L': ([0,3,6], [9,12,15], [27,30,33], [53,50,47])
+    }
+    
+    times = 1
+    if mod == "'": times = 3
+    elif mod == "2": times = 2
+    
+    for _ in range(times):
+        # Rotate face
+        state[base:base+9] = rotate_face_cw(state[base:base+9])
+        
+        # Rotate adjacent edges
+        c = cycles[face]
+        tmp = [state[i] for i in c[3]]
+        for i in range(3): state[c[3][i]] = state[c[2][i]]
+        for i in range(3): state[c[2][i]] = state[c[1][i]]
+        for i in range(3): state[c[1][i]] = state[c[0][i]]
+        for i in range(3): state[c[0][i]] = tmp[i]
+        
+    return state
+
+
 class RubiksApp:
     CLICKS_FILE = 'saved_clicks.json'
 
@@ -41,6 +87,8 @@ class RubiksApp:
         self.logs = []
         self.clicks_a = []
         self.clicks_b = []
+        self.orig_img_a = None
+        self.orig_img_b = None
         self._try_load_clicks()
 
     def _try_load_clicks(self):
@@ -77,16 +125,31 @@ class RubiksApp:
         return current_state, gr.update(elem_classes=["sticker-btn", f"color-{new_color}"]), self.get_3d_update_js(current_state)
 
     def get_3d_update_js(self, state):
+        import time
+        state_dict = {}
+        for i, face in enumerate(FACE_NAMES):
+            state_dict[face] = state[i*9 : (i+1)*9]
+        return (
+            f"(function(){{ "
+            f"console.log('Execute 3D UI update, ts: {time.time()}');"
+            f"var stateObj = {json.dumps(state_dict)};"
+            f"var iframes = document.querySelectorAll('iframe');"
+            f"for(var i=0; i<iframes.length; i++){{"
+            f"  try {{ iframes[i].contentWindow.postMessage({{ type: 'UPDATE_STATE', state: stateObj }}, '*'); }} catch(e){{}}"
+            f"}}"
+            f"}})()"
+        )
+
+    def get_3d_animation_js(self, state, move_str):
         state_dict = {}
         for i, face in enumerate(FACE_NAMES):
             state_dict[face] = state[i*9 : (i+1)*9]
         state_json = json.dumps(state_dict)
-        # Directly find iframe and postMessage - don't rely on window.updateCube3D
         return (
             f"(function(){{ "
             f"var iframes = document.querySelectorAll('iframe'); "
             f"for(var i=0; i<iframes.length; i++) {{ "
-            f"  try {{ iframes[i].contentWindow.postMessage({{ type: 'UPDATE_STATE', state: {state_json} }}, '*'); }} catch(e){{}} "
+            f"  try {{ iframes[i].contentWindow.postMessage({{ type: 'MOVE_AND_UPDATE', move: '{move_str}', state: {state_json} }}, '*'); }} catch(e){{}} "
             f"}} "
             f"}})()"
         )
@@ -108,15 +171,29 @@ class RubiksApp:
 
     def handle_click_a(self, img, evt: gr.SelectData):
         if len(self.clicks_a) >= 7:
-            return img, self.log("视角 A 已选满 (7/7)。如需重选请点击'重置状态'。")
+            return img, self.log("提示: 视角 A 已标注 7 个点。如需重选请点击 [清空点击点]")
         self.clicks_a.append((evt.index[0], evt.index[1]))
         return self.draw_and_guide(img, self.clicks_a, "A")
 
     def handle_click_b(self, img, evt: gr.SelectData):
         if len(self.clicks_b) >= 7:
-            return img, self.log("视角 B 已选满 (7/7)。如需重选请点击'重置状态'。")
+            return img, self.log("提示: 视角 B 已标注 7 个点。如需重选请点击 [清空点击点]")
         self.clicks_b.append((evt.index[0], evt.index[1]))
         return self.draw_and_guide(img, self.clicks_b, "B")
+
+    def set_orig_a(self, img):
+        if img is not None:
+            self.orig_img_a = img.copy()
+            self.clicks_a = []
+            return self.log("视角 A 图片已导入，标注点已自?重置")
+        return gr.update()
+
+    def set_orig_b(self, img):
+        if img is not None:
+            self.orig_img_b = img.copy()
+            self.clicks_b = []
+            return self.log("视角 B 图片已导入，标注点已自?重置")
+        return gr.update()
 
     def draw_and_guide(self, img, clicks, view_name):
         count = len(clicks)
@@ -146,53 +223,61 @@ class RubiksApp:
     def clear_clicks(self):
         self.clicks_a = []
         self.clicks_b = []
-        return None, None, self.log("点击坐标已清空")
+        # Return clean images if we have them
+        res_a = self.orig_img_a if self.orig_img_a is not None else gr.update()
+        res_b = self.orig_img_b if self.orig_img_b is not None else gr.update()
+        return res_a, res_b, self.log("📌 点点击坐标已清空，视图已恢复原始状态")
 
     def identify_colors(self, img_a, img_b, current_state):
         if img_a is None or img_b is None:
-            return current_state, self.log("错误: 请先上传两张图片"), "", None, None
+            return [current_state, self.log("错误: 请先上传或捕捉两张魔方视角图片"), "", gr.update(), gr.update()] + [gr.update()]*54
         
+        print(f"DEBUG: identify_colors called. Image A: {getattr(img_a, 'shape', 'no shape')}, Image B: {getattr(img_b, 'shape', 'no shape')}")
+        print(f"DEBUG: Clicks A: {len(self.clicks_a)}, Clicks B: {len(self.clicks_b)}")
+
         if len(self.clicks_a) < 7 or len(self.clicks_b) < 7:
-            return current_state, self.log("提示: 每个视角需要点击 7 个关键点 (中心+6个角)"), "", None, None
+            return [current_state, self.log(f"提示: 需要标注 7 个定位点 (当前 A:{len(self.clicks_a)} B:{len(self.clicks_b)})"), "", gr.update(), gr.update()] + [gr.update()]*54
 
         try:
-            self.log("步骤 1/4: 正在对齐视角 A 采样点并提取颜色...")
-            raw_colors_a = self.sample_colors_7pt(img_a, self.clicks_a, 'A', 0)
+            # Use original clean images for sampling to avoid UI markers
+            s_img_a = self.orig_img_a if self.orig_img_a is not None else img_a
+            s_img_b = self.orig_img_b if self.orig_img_b is not None else img_b
+
+            self.log("步骤 1/4: 采样视角 A 颜色...")
+            raw_colors_a = self.sample_colors_7pt(s_img_a, self.clicks_a, 'A', 0)
             
-            self.log("步骤 2/4: 正在对齐视角 B 采样点并提取颜色...")
-            raw_colors_b = self.sample_colors_7pt(img_b, self.clicks_b, 'B', 27)
+            self.log("步骤 2/4: 采样视角 B 颜色...")
+            raw_colors_b = self.sample_colors_7pt(s_img_b, self.clicks_b, 'B', 27)
             
             all_raw = raw_colors_a + raw_colors_b
             
-            self.log("步骤 3/4: 正在进行颜色识别 (HSV + G/R ratio)...")
+            self.log("步骤 3/4: 分析色彩分布与聚类匹配...")
             # cv_engine returns colors in order: [U(0-8), F(9-17), R(18-26), D(27-35), L(36-44), B(45-53)]
             engine_state, _, _ = cluster_and_map_colors(all_raw)
             
-            # Use engine_state directly - no remapping needed
-            # The solver uses center colors to determine face identities
             new_state = list(engine_state)
             
-            self.log("步骤 4/4: 正在生成识别结果图像与 3D 同步...")
-            # Draw result images (using engine_state order since draw uses start_idx 0/27 into engine order)
+            self.log("步骤 4/4: 生成 3D 预览与校验视图...")
             res_a = self.draw_enhanced_results_7pt(img_a, self.clicks_a, engine_state, 'A', 0)
             res_b = self.draw_enhanced_results_7pt(img_b, self.clicks_b, engine_state, 'B', 27)
             
-            # Generate UI updates for the 54 buttons (in ordered_btns order = app state order)
+            # Generate UI updates for the 54 buttons (mapped via ordered_btns)
             btn_updates = []
             for color in new_state:
-                btn_updates.append(gr.update(elem_classes=["sticker-btn", f"color-{color}"]))
+                # Add a label as value to confirm the color update is happening
+                label = color[0].upper()
+                btn_updates.append(gr.update(value=label, elem_classes=["sticker-btn", f"color-{color}"]))
 
-            final_log = self.log("识别成功! 54个色块已识别, 3D 预览已更新。")
-            # Debug: print what's sent to 3D
-            for i, face in enumerate(FACE_NAMES):
-                colors = new_state[i*9:(i+1)*9]
-                print(f"  3D → {face}: {','.join(colors)}")
-                self.log(f"面 {face} 状态: {','.join(colors)}")
-            return [new_state, final_log, self.get_3d_update_js(new_state), res_a, res_b] + btn_updates
+            final_log = self.log("✅ 识别成功! 魔方状态已更新到 3D 预览。")
+            
+            # Update 3D
+            js_update = self.get_3d_update_js(new_state)
+            
+            return [new_state, final_log, js_update, res_a, res_b] + btn_updates
         except Exception as e:
             import traceback
             traceback.print_exc()
-            return current_state, self.log(f"识别异常: {str(e)}"), "", None, None
+            return [current_state, self.log(f"❌ 识别发生内部错误: {str(e)}"), "", gr.update(), gr.update()] + [gr.update()]*54
 
     def get_quads(self, pts, view_type='A'):
         # pts[0]=1(top), pts[1]=2(NW), pts[2]=3(SW), pts[3]=4(bottom), pts[4]=5(SE), pts[5]=6(NE), pts[6]=7(center)
@@ -319,6 +404,59 @@ class RubiksApp:
         except Exception as e:
             return self.log(f"解算异常: {str(e)}"), "无法解算"
 
+    def scramble(self, state):
+        import random
+        import time
+        moves_list = ['U', 'D', 'F', 'B', 'L', 'R']
+        mods = ['', "'", '2']
+        sequence = [random.choice(moves_list) + random.choice(mods) for _ in range(20)]
+        self.log(f"正在打乱: {' '.join(sequence)}")
+        
+        for move in sequence:
+            state = rotate_cube_state(state, move)
+            updates = [gr.update(elem_classes=["sticker-btn", f"color-{c}"]) for c in state]
+            js = self.get_3d_animation_js(state, move)
+            yield [state, self.log(f"打乱: {move}")] + updates + [js]
+            time.sleep(0.35) 
+            
+    def play_solution(self, state, steps_str):
+        import time
+        if not steps_str or steps_str == "无法解算":
+            yield [state, self.log("提示: 请先生成有效的解算公式！")] + [gr.update()]*54 + [None]
+            return
+            
+        steps = steps_str.split()
+        for move in steps:
+            state = rotate_cube_state(state, move)
+            updates = [gr.update(elem_classes=["sticker-btn", f"color-{c}"]) for c in state]
+            js = self.get_3d_animation_js(state, move)
+            yield [state, self.log(f"播放执行: {move}")] + updates + [js]
+            time.sleep(0.35)
+        yield [state, self.log("🎉 还原动画播放完毕！")] + updates + [None]
+
+    def handle_keyboard_move(self, state, move_str):
+        if not move_str: return [state, gr.update(), gr.update()] + [gr.update()]*54 + [None]
+        
+        actual_move = move_str.split('_')[0]
+        new_state = rotate_cube_state(state, actual_move)
+        logs = self.log(f"⌨️ 键盘旋转: {actual_move}")
+        updates = [gr.update(elem_classes=["sticker-btn", f"color-{c}"]) for c in new_state]
+        
+        # We do not clear move_str anymore to prevent double-firing. The JS makes it unique.
+        return [new_state, logs, gr.update()] + updates + [self.get_3d_update_js(new_state)]
+
+    def save_state(self, state):
+        self.saved_state = list(state)
+        return self.log("💾 当前状态已保存，可随时使用 [恢复状态] 还原。")
+
+    def restore_state(self):
+        if hasattr(self, 'saved_state') and self.saved_state:
+            updates = [gr.update(elem_classes=["sticker-btn", f"color-{c}"]) for c in self.saved_state]
+            js = self.get_3d_update_js(self.saved_state)
+            return [self.saved_state, self.log("📂 状态已恢复到保存点！")] + updates + [js]
+        else:
+            return [gr.update(), self.log("提示: 系统中暂无保存的状态。")] + [gr.update()]*54 + [None]
+
     def reset_state(self):
         new_state = INITIAL_STATE.copy()
         self.clicks_a = []
@@ -333,6 +471,12 @@ app_logic = RubiksApp()
 CSS = """
 .sticker-btn { border: 2px solid #222 !important; min-width: 40px !important; height: 40px !important; margin: 1px !important; padding: 0 !important; }
 .face-container { padding: 5px; border: 1px solid #555; background: #333; }
+.hidden-bridge {
+    position: absolute !important;
+    left: -9999px !important;
+    height: 0 !important;
+    overflow: hidden !important;
+}
 .color-white { background-color: #FFFFFF !important; color: black !important; }
 .color-yellow { background-color: #FFFF00 !important; color: black !important; }
 .color-red { background-color: #FF0000 !important; }
@@ -343,18 +487,32 @@ CSS = """
 
 JS_CODE = """
 function() {
+    console.log("Rubiks Bridge: Initializing...");
+    
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'SEND_MOVE') {
+            const move = event.data.move;
+            console.log("Rubiks Bridge: Move request ->", move);
+            
+            const inputWrapper = document.getElementById('hidden-move-input');
+            if (inputWrapper) {
+                const textarea = inputWrapper.querySelector('textarea');
+                if (textarea) {
+                    textarea.value = move + "_" + Date.now();
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+                    console.log("Rubiks Bridge: Dispatched change event");
+                }
+            }
+        }
+    });
+
     window.updateCube3D = function(state) {
         const iframe = document.getElementById('cube-3d-iframe');
         if (iframe && iframe.contentWindow) {
             iframe.contentWindow.postMessage({ type: 'UPDATE_STATE', state: state }, '*');
         }
     };
-    // Initialize 3D view after a short delay to ensure iframe is loaded
-    setTimeout(() => {
-        if (window.updateCube3D) {
-            // Get initial state if possible or wait for first update
-        }
-    }, 1000);
 }
 """
 
@@ -365,10 +523,12 @@ init_img_b = "D-B-L.png" if os.path.exists("D-B-L.png") else None
 if app_logic.clicks_a and init_img_a:
     _img = cv2.imread(init_img_a)
     _img = cv2.cvtColor(_img, cv2.COLOR_BGR2RGB)
+    app_logic.orig_img_a = _img.copy() # Keep clean copy
     init_img_a, _ = app_logic.draw_and_guide(_img, app_logic.clicks_a, "A")
 if app_logic.clicks_b and init_img_b:
     _img = cv2.imread(init_img_b)
     _img = cv2.cvtColor(_img, cv2.COLOR_BGR2RGB)
+    app_logic.orig_img_b = _img.copy() # Keep clean copy
     init_img_b, _ = app_logic.draw_and_guide(_img, app_logic.clicks_b, "B")
 
 with gr.Blocks() as demo:
@@ -453,17 +613,32 @@ with gr.Blocks() as demo:
             
             with gr.Column():
                 gr.Markdown("### ⚙️ 控制面板")
-                btn_solve = gr.Button("🚀 开始智能求解", variant="primary")
-                btn_reset = gr.Button("🔄 重置状态")
-                out_steps = gr.Textbox(label="还原公式", lines=2, interactive=False)
+                
+                with gr.Row():
+                    btn_solve = gr.Button("🚀 计算还原公式", variant="primary")
+                    btn_play = gr.Button("▶️ 播放还原动画")
+                    
+                out_steps = gr.Textbox(label="还原公式 (空格分隔序列)", lines=2, interactive=False)
+                
+                with gr.Row():
+                    btn_save_state = gr.Button("💾 保存状态")
+                    btn_restore_state = gr.Button("📂 恢复状态")
+                    
+                with gr.Row():
+                    btn_scramble = gr.Button("🔀 一键随机打乱")
+                    btn_reset = gr.Button("🔄 重置为白顶绿前")
+                
+            # Hidden elements for JS keyboard bridge
+            hidden_move_input = gr.Textbox(label="Bridge Input", elem_id="hidden-move-input", elem_classes="hidden-bridge")
                 
             log_display = gr.TextArea(
                 value=f"[系统就绪] {'已加载保存的标注点 (A={len(app_logic.clicks_a)}, B={len(app_logic.clicks_b)}), 可直接提取!' if app_logic.clicks_a else '请在上方视角 A 中点击第一个点'}",
                 interactive=False, lines=8)
 
-
-
     # Handlers
+    img_a.upload(app_logic.set_orig_a, inputs=[img_a], outputs=[log_display])
+    img_b.upload(app_logic.set_orig_b, inputs=[img_b], outputs=[log_display])
+    
     img_a.select(app_logic.handle_click_a, inputs=[img_a], outputs=[img_a, log_display])
     img_b.select(app_logic.handle_click_b, inputs=[img_b], outputs=[img_b, log_display])
     btn_clear_pts.click(app_logic.clear_clicks, outputs=[img_a, img_b, log_display])
@@ -480,21 +655,22 @@ with gr.Blocks() as demo:
     ordered_btns = sticker_btns[0:9]   # U → state 0-8
     ordered_btns += sticker_btns[18:27] # F → state 9-17
     ordered_btns += sticker_btns[27:36] # R → state 18-26
-    ordered_btns += sticker_btns[45:54] # D → state 27-35
-    ordered_btns += sticker_btns[9:18]  # L → state 36-44
-    ordered_btns += sticker_btns[36:45] # B → state 45-53
+    ordered_btns += sticker_btns[45:54]  # D → state 27-35
+    ordered_btns += sticker_btns[9:18]   # L → state 36-44
+    ordered_btns += sticker_btns[36:45]  # B → state 45-53
+
+    # Bind Keyboard Events via invisible proxy input change
+    hidden_move_input.change(
+        fn=app_logic.handle_keyboard_move,
+        inputs=[state, hidden_move_input],
+        outputs=[state, log_display, hidden_move_input] + ordered_btns + [js_trigger]
+    )
 
     btn_identify.click(
         app_logic.identify_colors, 
         inputs=[img_a, img_b, state], 
         outputs=[state, log_display, js_trigger, img_a, img_b] + ordered_btns
     )
-    ordered_btns = sticker_btns[0:9]   # U → state 0-8
-    ordered_btns += sticker_btns[18:27] # F → state 9-17
-    ordered_btns += sticker_btns[27:36] # R → state 18-26
-    ordered_btns += sticker_btns[45:54] # D → state 27-35
-    ordered_btns += sticker_btns[9:18]  # L → state 36-44
-    ordered_btns += sticker_btns[36:45] # B → state 45-53
 
     for i in range(54):
         def make_handler(idx):
@@ -507,6 +683,26 @@ with gr.Blocks() as demo:
         )
 
     btn_solve.click(app_logic.solve, inputs=[state], outputs=[log_display, out_steps])
+    
+    # Interactions
+    btn_play.click(
+        fn=app_logic.play_solution,
+        inputs=[state, out_steps],
+        outputs=[state, log_display] + ordered_btns + [js_trigger]
+    )
+    
+    btn_scramble.click(
+        fn=app_logic.scramble,
+        inputs=[state],
+        outputs=[state, log_display] + ordered_btns + [js_trigger]
+    )
+    
+    btn_save_state.click(app_logic.save_state, inputs=[state], outputs=[log_display])
+    
+    btn_restore_state.click(
+        fn=app_logic.restore_state,
+        outputs=[state, log_display] + ordered_btns + [js_trigger]
+    )
     
     # Reset is tricky because it needs to update 54 buttons.
     btn_reset.click(
